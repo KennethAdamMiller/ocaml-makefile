@@ -36,6 +36,7 @@ export DOC_FILES
 FIRST_DOC_FILE := $(firstword $(DOC_FILES))
 
 export BCSUFFIX
+export JBCSUFFIX
 export NCSUFFIX
 
 ifndef TOPSUFFIX
@@ -219,6 +220,7 @@ export PIC_CFLAGS
 export PIC_CPPFLAGS
 
 BCRESULT  := $(addsuffix $(BCSUFFIX), $(RESULT))
+JBCRESULT := $(addsuffix $(JBCSUFFIX), $(RESULT))
 NCRESULT  := $(addsuffix $(NCSUFFIX), $(RESULT))
 TOPRESULT := $(addsuffix $(TOPSUFFIX), $(RESULT))
 
@@ -236,6 +238,11 @@ ifndef OCAMLC
   OCAMLC := ocamlc
 endif
 export OCAMLC
+
+ifndef OCAMLJAVA
+  OCAMLJAVA := ocamljava
+endif
+export OCAMLJAVA
 
 ifndef OCAMLOPT
   OCAMLOPT := ocamlopt
@@ -420,7 +427,7 @@ export CPPFLAGS_WIN32
 
 INCFLAGS :=
 
-SHELL := /bin/sh
+SHELL := /bin/zsh
 
 MLDEPDIR := ._d
 BCDIDIR  := ._bcdi
@@ -494,8 +501,11 @@ IMPLO_INTF   := $(IMPLO_INTF:%.mli.cmi=%.cmi)
 
 IMPLX_INTF   := $(IMPLO_INTF:.cmo=.cmx)
 
+IMPLJ_INTF   := $(IMPLO_INTF:.cmo=.cmj)
+
 INTF         := $(filter %.cmi, $(IMPLO_INTF))
 IMPL_CMO     := $(filter %.cmo, $(IMPLO_INTF))
+IMPL_CMJ     := $(filter %.cmj, $(IMPLJ_INTF))
 IMPL_CMX     := $(IMPL_CMO:.cmo=.cmx)
 IMPL_ASM     := $(IMPL_CMO:.cmo=.asm)
 IMPL_S       := $(IMPL_CMO:.cmo=.s)
@@ -504,7 +514,7 @@ OBJ_LINK     := $(OBJ_C_IDL) $(OBJ_C_CXX)
 OBJ_FILES    := $(IMPL_CMO:.cmo=.$(EXT_OBJ)) $(OBJ_LINK)
 
 EXECS        := $(addsuffix $(EXE), \
-                            $(sort $(TOPRESULT) $(BCRESULT) $(NCRESULT)))
+                            $(sort $(TOPRESULT) $(JBCRESULT) $(BCRESULT) $(NCRESULT)))
 ifdef WIN32
   EXECS      += $(BCRESULT).dll $(NCRESULT).dll
 endif
@@ -523,10 +533,11 @@ endif
 NONEXECS     := $(INTF) $(IMPL_CMO) $(IMPL_CMX) $(IMPL_ASM) $(IMPL_S) \
 		$(OBJ_FILES) $(PRE_TARGETS) $(BCRESULT).cma $(NCRESULT).cmxa \
 		$(NCRESULT).$(EXT_LIB) $(BCRESULT).cmi $(BCRESULT).cmo \
+		$(JBCRESULT).cmj $(JBCRESULT).cmja $(JBCRESULT).jo $(IMPL_CMO:.cmo=.cmj)\
 		$(NCRESULT).cmi $(NCRESULT).cmx $(NCRESULT).$(EXT_OBJ) \
-		$(RES_CLIB) $(IMPL_CMO:.cmo=.annot) \
+		$(RES_CLIB) $(IMPL_CMO:.cmo=.annot) $(IMPL_CMO:.cmo=.jo) \
 		$(LIB_PACK_NAME).cmi $(LIB_PACK_NAME).cmo $(LIB_PACK_NAME).cmx \
-		$(LIB_PACK_NAME).$(EXT_OBJ)
+		$(LIB_PACK_NAME).$(EXT_OBJ) $(JBCRESULT).jar
 
 ifndef STATIC
   NONEXECS += $(DLLSONAME)
@@ -688,6 +699,53 @@ ifndef REAL_OCAMLC
     endif
   endif
 
+# check if ocamljava has been defined...
+else ifdef OCAMLJAVA
+  JAVA_BYTE_OCAML := y
+  EXE := .jar
+  EXTRADEPS := $(addsuffix .cmja,$(foreach i,$(LIBS),$(if $(findstring /,$(i)),$(i))))
+  ifndef PROFILING
+    SPECIAL_OCAMLFLAGS := $(OCAMLNCFLAGS)
+    PLDFLAGS :=
+  else
+    error "ocamljava not known to have profiling option"
+  endif
+  ifndef LIB_PACK_NAME
+    SPECIAL_OCAMLFLAGS := $(OCAMLNCFLAGS) #TODO should be $(OCAMLJBCFLAGS)
+  else
+    SPECIAL_OCAMLFLAGS := -for-pack $(FOR_PACK_NAME) $(OCAMLNCFLAGS)
+  endif
+  REAL_IMPL := $(IMPL_CMJ)
+  REAL_IMPL_INTF := $(IMPLJ_INTF)
+  IMPL_SUF := .cmj
+  EXT_OBJ  := .jo
+
+  DEPFLAGS  := 
+  MAKE_DEPS := $(MLDEPS) $(NCDEPIS)
+
+  #TODO some cmo showing up still in som
+  ALL_LDFLAGS := $(PLDFLAGS) $(INCFLAGS) $(OCAMLLDFLAGS) \
+                 $(OCAMLNLDFLAGS) $(COMMON_LDFLAGS) 
+
+  CAMLIDLDLLFLAGS := -opt
+
+  ifndef CREATE_LIB
+    ALL_LDFLAGS += $(LIBS:%=%.cmja)
+  else
+    override CFLAGS := $(PIC_CFLAGS) $(CFLAGS)
+    override CPPFLAGS := $(PIC_CPPFLAGS) $(CPPFLAGS)
+  endif
+
+  ifdef THREADS
+    THREAD_FLAG := -thread
+    ALL_LDFLAGS := $(THREAD_FLAG) $(ALL_LDFLAGS)
+    ifndef CREATE_LIB
+      ifndef REAL_OCAMLFIND
+        ALL_LDFLAGS := unix.cmja threads.cmja $(ALL_LDFLAGS)
+      endif
+    endif
+  endif
+
 # we have to make native-code
 else
   EXTRADEPS := $(addsuffix .cmxa,$(foreach i,$(LIBS),$(if $(findstring /,$(i)),$(i))))
@@ -770,6 +828,21 @@ bcnl:	byte-code-nolink
 top:			$(PRE_TARGETS)
 			$(QUIET)$(MAKE) -r -f $(OCAMLMAKEFILE) $(TOPRESULT) \
 				REAL_RESULT="$(BCRESULT)" make_deps=yes
+
+# generates java byte-code
+java-byte-code:		$(PRE_TARGETS)
+			$(QUIET)$(MAKE) -r -f $(OCAMLMAKEFILE) $(JBCRESULT) \
+				REAL_RESULT="$(JBCRESULT)" make_deps=yes \
+				REAL_OCAMLC="$(OCAMLJAVA)"
+
+jbc:	java-byte-code
+
+java-byte-code-nolink:	$(PRE_TARGETS)
+			$(QUIET)$(MAKE) -r -f $(OCAMLMAKEFILE) nolink \
+				REAL_RESULT="$(JBCRESULT)" make_deps=yes \
+				REAL_OCAMLC="$(OCAMLJAVA)"
+
+jbcnl:	java-byte-code-nolink
 
 # generates native-code
 
@@ -947,7 +1020,6 @@ doc: htdoc ladoc psdoc pdfdoc
 
 ###########################################################################
 # LOW LEVEL RULES
-
 $(REAL_RESULT):		$(REAL_IMPL_INTF) $(OBJ_LINK) $(EXTRADEPS) $(RESULTDEPS)
 			$(REAL_OCAMLFIND) $(REAL_OCAMLC) \
 				$(OCAML_FIND_PACKAGES) $(OCAML_FIND_LINKPKG) \
@@ -970,7 +1042,7 @@ endif
 
 .SUFFIXES:		.mli .ml .cmi .cmo .cmx .cma .cmxa .$(EXT_OBJ) \
                         .mly .di .d .$(EXT_LIB) .idl %.oxridl .c .m .$(EXT_CXX) .h .so \
-                        .rep .zog .glade
+                        .rep .zog .glade .jo
 
 ifndef STATIC
 ifdef MINGW
@@ -1029,8 +1101,15 @@ $(LIB_PACK_NAME_CMI) $(LIB_PACK_NAME).cmo: $(REAL_IMPL_INTF)
 			$(REAL_OCAMLFIND) $(REAL_OCAMLC) -pack -o $(LIB_PACK_NAME).cmo $(OCAMLLDFLAGS) $(REAL_IMPL)
 # Packing into a unit which can be transformed into a library
 # Remember the .ml's must have been compiled with -for-pack $(LIB_PACK_NAME)
+else ifdef JAVA_BYTE_OCAML
+$(LIB_PACK_NAME_CMI) $(LIB_PACK_NAME).cmj: $(REAL_IMPL_INTF)
+			$(REAL_OCAMLFIND) $(REAL_OCAMLC) -pack $(OBJ_LIBS) -o $(LIB_PACK_NAME).cmj $(OCAMLLDFLAGS) $(REAL_IMPL)
+$(LIB_PACK_NAME).cmja $(RESULT).$(EXT_LIB): $(LIB_PACK_NAME).cmi $(LIB_PACK_NAME).cmj $(EXTRADEPS) $(RESULTDEPS)
+			$(REAL_OCAMLFIND) $(REAL_OCAMLC) -pack $(OBJS_LIBS) $(filter-out -custom, $(ALL_LDFLAGS)) -o $@ $(LIB_PACK_NAME)
+# Packing into a unit which can be transformed into a library
+# Remember the .ml's must have been compiled with -for-pack $(LIB_PACK_NAME)
 else
-$(LIB_PACK_NAME_CMI) $(LIB_PACK_NAME).cmx: $(REAL_IMPL_INTF)
+$(LIB_PACK_NAME_CMI) $(LIB_PACK_NAME).cmx: $(REAL_IMPL_INTF) 
 			$(REAL_OCAMLFIND) $(OCAMLOPT) -pack -o $(LIB_PACK_NAME).cmx  $(OCAMLLDFLAGS) $(REAL_IMPL)
 endif
 
